@@ -1,11 +1,14 @@
 package eol
 
 import (
-"github.com/dropbox/godropbox/errors"
 "net/http"
 	"io/ioutil"
 	"encoding/json"
 	"fmt"
+	"github.com/saleswise/errors/errors"
+	"strings"
+	"time"
+	"sort"
 )
 
 type PageQuery struct {
@@ -66,7 +69,7 @@ func (q PageQuery) urlString() string {
 		url += fmt.Sprintf("&licenses=%s", q.Licenses)
 	}
 	if q.CommonNames  {
-		url += "&common_name=true"
+		url += "&common_names=true"
 	}
 	if q.Details  {
 		url += "&details=true"
@@ -89,35 +92,55 @@ func (q PageQuery) urlString() string {
 	return url
 }
 
+type DataObjects []DataObject
+
+func (a DataObjects) Len() int           { return len(a) }
+func (a DataObjects) Swap(i, j int)      { a[i], a[j] = a[j], a[i] }
+func (a DataObjects) Less(i, j int) bool { return a[i].DataRating > a[j].DataRating }
+
 type DataObject struct {
+	Identifier string `json:"identifier"`
+	DataObjectVersionID int `json:"dataObjectVersionID"`
+	DataType DataType `json:"dataType"`
+	DataSubtype string `json:"dataSubtype"`
+	VettedStatus string `json:"vettedStatus"`
+	DataRatings struct {
+			   Num1 int `json:"1"`
+			   Num2 int `json:"2"`
+			   Num3 int `json:"3"`
+			   Num4 int `json:"4"`
+			   Num5 int `json:"5"`
+		   } `json:"dataRatings"`
+	DataRating float64 `json:"dataRating"`
+	Subject string `json:"subject,omitempty"`
+	MimeType string `json:"mimeType"`
+	Created time.Time `json:"created,omitempty"`
+	Modified time.Time `json:"modified,omitempty"`
+	Language string `json:"language"`
+	License string `json:"license"`
+	RightsHolder string `json:"rightsHolder,omitempty"`
+	Source string `json:"source"`
+	Description string `json:"description"`
 	Agents []struct {
 		FullName string `json:"full_name"`
 		Homepage string `json:"homepage"`
-		Role     string `json:"role"`
+		Role string `json:"role"`
 	} `json:"agents"`
-	Created             string        `json:"created"`
-	DataObjectVersionID int           `json:"dataObjectVersionID"`
-	DataRating          float64       `json:"dataRating"`
-	DataSubtype         string        `json:"dataSubtype"`
-	DataType            DataType        `json:"dataType"`
-	Description         string        `json:"description"`
-	Identifier          string        `json:"identifier"`
-	Language            string        `json:"language"`
-	License             string        `json:"license"`
-	MimeType            string        `json:"mimeType"`
-	MediaUrl        string          `json:"mediaURL"`
-	EOLMediaUrl        string          `json:"eolMediaURL"`
-	Modified            string        `json:"modified"`
-	References          []interface{} `json:"references"`
-	RightsHolder        string        `json:"rightsHolder"`
-	Source              string        `json:"source"`
-	VettedStatus        string        `json:"vettedStatus"`
-	Subject        string        `json:"subject"`
-	Height  int `json:"height"`
-	Width  int `json:"width"`
-	CropX  string `json:"crop_x"`
-	CropY  string `json:"crop_y"`
-	CropWidth  string `json:"crop_width"`
+	References []interface{} `json:"references"`
+	Title string `json:"title,omitempty"`
+	Rights string `json:"rights,omitempty"`
+	Audience []string `json:"audience,omitempty"`
+	Height int `json:"height,omitempty"`
+	Width int `json:"width,omitempty"`
+	CropX string `json:"crop_x,omitempty"`
+	CropY string `json:"crop_y,omitempty"`
+	CropWidth string `json:"crop_width,omitempty"`
+	MediaURL string `json:"mediaURL,omitempty"`
+	EolMediaURL string `json:"eolMediaURL,omitempty"`
+	EolThumbnailURL string `json:"eolThumbnailURL,omitempty"`
+	Latitude float64 `json:"latitude,omitempty"`
+	Longitude float64 `json:"longitude,omitempty"`
+	Location string `json:"location,omitempty"`
 }
 
 type PageResponse struct {
@@ -157,30 +180,29 @@ type Media struct {
 	Value string `json:"value" bson:"value"`
 }
 
-func (this *PageResponse) Texts() (response []Media) {
+func (this *PageResponse) Texts() (response DataObjects) {
 	for _, o := range this.DataObjects {
 		if o.DataType == DataTypeText && o.Description != "" {
-			response = append(response, Media{
-				Value: o.Description,
-				Source: o.Source,
-			})
+			response = append(response, o)
 		}
 	}
-	return
+	sort.Sort(response)
+	return response
 }
 
-func (this *PageResponse) Images() (response []Media) {
+func (this *PageResponse) Images() (response DataObjects) {
 	for _, o := range this.DataObjects {
-		if o.DataType == DataTypeStillImage && o.EOLMediaUrl != "" {
-			response = append(response, Media{
-				Value: o.EOLMediaUrl,
-				Source: o.Source,
-			})
+		if o.DataType == DataTypeStillImage && o.MediaURL != "" {
+			response = append(response, o)
 		}
 	}
-	return
+	sort.Sort(response)
+	return response
 }
 
+func ErrNotFound(e error) bool {
+	return strings.Contains(e.Error(), "404")
+}
 
 func Page(q PageQuery) (*PageResponse, error) {
 
@@ -193,6 +215,10 @@ func Page(q PageQuery) (*PageResponse, error) {
 		return nil, errors.Wrap(err, "could not get http response")
 	}
 	defer resp.Body.Close()
+
+	if resp.StatusCode == 404 {
+		return nil, errors.New("404 (Not Found)")
+	}
 
 	if resp.StatusCode != 200 {
 		return nil, errors.Wrapf(errors.New(resp.Status), "StatusCode: %d; URL: %s", resp.StatusCode, q.urlString())
